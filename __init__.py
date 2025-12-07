@@ -96,5 +96,109 @@ class CO_OT_CaN_MergeStrips(bpy.types.Operator):
 
             for fcurve in fcurves:
                 if fcurve.array_index == 0 and fcurve.data_path not in affected_fcurves:
-                    affected_fcurves.append(fcu_
+                    affected_fcurves.append(fcurve.data_path)
 
+        # If nothing to merge, cancel safely
+        if not affected_fcurves:
+            wm.progress_end()
+            self.report({'WARNING'}, "No F-curves found in selected strips.")
+            return {'CANCELLED'}
+
+        # --------------------------------------------------------------------
+        # Evaluate values at each frame
+        # --------------------------------------------------------------------
+        fcurve_values = []
+        for frame in range(strip_start, strip_end):
+            bpy.context.scene.frame_set(frame)
+
+            update_progress(progress_increment)
+
+            vals = []
+            for path in affected_fcurves:
+                try:
+                    vals.append(obj.path_resolve(path).copy())
+                except:
+                    vals.append(obj.path_resolve(path))
+            fcurve_values.append(vals)
+
+        # --------------------------------------------------------------------
+        # Create merged action
+        # --------------------------------------------------------------------
+        name = f"{selected_strips[0].name}_merged"
+        action = bpy.data.actions.new(name=name)
+
+        def add_fcurve(action, k):
+            fcurve = action.fcurves.new(data_path=path, index=k)
+            fcurve.extrapolation = 'LINEAR'
+            fcurve.keyframe_points.add(len(fcurve_values))
+            return fcurve
+
+        # Populate action F-curves
+        for i, path in enumerate(affected_fcurves):
+            new_fcurves = []
+
+            try:
+                for k, n in enumerate(fcurve_values[0][i]):
+                    new_fcurves.append(add_fcurve(action, k))
+            except:
+                new_fcurves.append(add_fcurve(action, 0))
+
+            for frame, frame_values in enumerate(fcurve_values):
+                update_progress(progress_increment / len(affected_fcurves))
+
+                val = frame_values[i]
+                for idx, new_fc in enumerate(new_fcurves):
+                    new_fc.keyframe_points[frame].co.x = frame
+                    new_fc.keyframe_points[frame].interpolation = 'LINEAR'
+                    try:
+                        new_fc.keyframe_points[frame].co.y = val[idx]
+                    except:
+                        new_fc.keyframe_points[frame].co.y = val
+
+        wm.progress_end()
+
+        # Restore NLA state
+        prev_track = None
+        for track in obj.animation_data.nla_tracks:
+            if track in disabled_tracks:
+                track.mute = False
+
+            for strip in track.strips:
+                if strip.select:
+                    strip.mute = True
+                    prev_track = track
+
+        # Create the new merged strip
+        new_track = obj.animation_data.nla_tracks.new(prev=prev_track)
+        new_track.name = action.name
+        strip = new_track.strips.new(name=name, start=strip_start, action=action)
+        strip.blend_type = strip_mode
+
+        bpy.context.scene.frame_set(begin_frame)
+
+        return {'FINISHED'}
+
+
+def MergeStrips_ContextMenu(self, context):
+    layout = self.layout
+    layout.operator(CO_OT_CaN_MergeStrips.bl_idname)
+
+
+classes = (CO_OT_CaN_MergeStrips,)
+
+def register():
+    from bpy.utils import register_class
+    bpy.types.NLA_MT_context_menu.append(MergeStrips_ContextMenu)
+    for cls in classes:
+        register_class(cls)
+
+
+def unregister():
+    from bpy.utils import unregister_class
+    bpy.types.NLA_MT_context_menu.remove(MergeStrips_ContextMenu)
+    for cls in reversed(classes):
+        unregister_class(cls)
+
+
+if __name__ == "__main__":
+    register()
