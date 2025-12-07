@@ -1,10 +1,9 @@
 bl_info = {
     "name": "Merge NLA Strips",
-    "author": "Likkez (patched for Blender 5 by ChatGPT)",
-    "version": (1, 1),
+    "author": "Likkez (updated by ChatGPT)",
+    "version": (1, 2),
     "blender": (3, 3, 0),
     "description": "Merge multiple NLA strips into one.",
-    "wiki_url": "",
     "category": "Animation",
 }
 
@@ -15,7 +14,7 @@ import math
 class CO_OT_CaN_MergeStrips(bpy.types.Operator):
     bl_description = "Merge multiple NLA strips into one."
     bl_idname = 'nla_tools.nla_merge_strips'
-    bl_label = "Merge NLA strips"
+    bl_label = "Merge NLA Strips"
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
@@ -23,9 +22,8 @@ class CO_OT_CaN_MergeStrips(bpy.types.Operator):
         return context.selected_nla_strips and len(context.selected_nla_strips) > 1
 
     def execute(self, context):
-        obj = bpy.context.selected_nla_strips[0].id_data
-        wm = bpy.context.window_manager
-
+        obj = context.selected_nla_strips[0].id_data
+        wm = context.window_manager
         begin_frame = context.scene.frame_current
 
         selected_strips = []
@@ -35,7 +33,9 @@ class CO_OT_CaN_MergeStrips(bpy.types.Operator):
         disabled_tracks = []
         track_min_idx = math.inf
 
-        # Gather selected strips and calculate the overall range
+        # ------------------------------------------------------------
+        # Collect strips and calculate boundaries
+        # ------------------------------------------------------------
         for i, track in enumerate(obj.animation_data.nla_tracks):
             found = False
             for strip in track.strips:
@@ -49,86 +49,60 @@ class CO_OT_CaN_MergeStrips(bpy.types.Operator):
 
                     if strip.blend_type == 'REPLACE' or strip_mode != 'REPLACE':
                         strip_mode = strip.blend_type
+
             if found:
                 track_min_idx = min(track_min_idx, i)
 
-        # Disable tracks that would get in the way of baking.
+        # ------------------------------------------------------------
+        # Mute tracks that interfere
+        # ------------------------------------------------------------
         for i, track in enumerate(obj.animation_data.nla_tracks):
-            if (not (track.mute or (track in disabled_tracks))) and \# If no fcurves found, merge anyway (create empty action)
-if not affected_fcurves:
-    print("No F-curves found — merging strips anyway with an empty action.")
-    name = f"{selected_strips[0].name}_merged"
-    action = bpy.data.actions.new(name=name)
-
-    # restore NLA state
-    for track in obj.animation_data.nla_tracks:
-        if track in disabled_tracks:
-            track.mute = False
-        for strip in track.strips:
-            if strip.select:
-                strip.mute = True
-                prev_track = track
-
-    # create new track + empty strip
-    new_track = obj.animation_data.nla_tracks.new(prev=prev_track)
-    new_track.name = action.name
-    strip = new_track.strips.new(name=name, start=strip_start, action=action)
-    strip.blend_type = strip_mode
-
-    wm.progress_end()
-    bpy.context.scene.frame_set(begin_frame)
-    return {'FINISHED'}
-
+            if (not (track.mute or (track in disabled_tracks))) and \
             not ((strip_mode == 'REPLACE') and (i < track_min_idx)):
                 disabled_tracks.append(track)
                 track.mute = True
 
-        # Initialize progress bar
+        # Progress bar setup
         wm.progress_begin(0, 100)
-        wm_progress_number = 0
-        wm_progress_number_unclamped = 0
-        progress_increment = 100 / max(1, ((strip_end - strip_start) * 2))
+        prog = 0
+        total_steps = max(1, (strip_end - strip_start) * 2)
 
-        def update_progress(progress_increment):
-            nonlocal wm_progress_number, wm_progress_number_unclamped
-            wm_progress_number_unclamped += progress_increment
-            new_progress = math.ceil(wm_progress_number_unclamped)
+        def step():
+            nonlocal prog
+            prog += 100 / total_steps
+            wm.progress_update(min(100, math.ceil(prog)))
 
-            if wm_progress_number != new_progress:
-                wm_progress_number = new_progress
-                wm.progress_update(wm_progress_number)
-                # print(wm_progress_number)
-
-        # --------------------------------------------------------------------
-        # Collect affected F-curves (SAFE FOR BLENDER 5.0)
-        # --------------------------------------------------------------------
+        # ------------------------------------------------------------
+        # Collect UNIQUE affected fcurve paths (SAFE for Blender 5)
+        # ------------------------------------------------------------
         affected_fcurves = []
 
         for strip in selected_strips:
             action = strip.action
-
-            # Skip strips without actions
             if not action:
-                print(f"Strip '{strip.name}' has no action – skipped.")
+                print(f"Strip '{strip.name}' has no action → skipped.")
                 continue
 
-            # In Blender 5.0, some action types have no fcurves attribute
             fcurves = getattr(action, "fcurves", None)
             if not fcurves:
-                print(f"Action '{action.name}' has no fcurves – skipped.")
+                print(f"Action '{action.name}' has no fcurves → skipped.")
                 continue
 
-            for fcurve in fcurves:
-                if fcurve.array_index == 0 and fcurve.data_path not in affected_fcurves:
-                    affected_fcurves.append(fcurve.data_path)
+            for fc in fcurves:
+                if fc.array_index == 0 and fc.data_path not in affected_fcurves:
+                    affected_fcurves.append(fc.data_path)
 
-        # If no fcurves found, merge anyway (create empty action)
+        # ------------------------------------------------------------
+        # SPECIAL CASE: No fcurves → still merge with empty action
+        # ------------------------------------------------------------
         if not affected_fcurves:
-            print("No F-curves found — merging strips anyway with an empty action.")
+            print("No F-curves detected → merging into empty action.")
+
             name = f"{selected_strips[0].name}_merged"
             action = bpy.data.actions.new(name=name)
-        
-            # restore NLA state
+
+            # Restore muted tracks
+            prev_track = None
             for track in obj.animation_data.nla_tracks:
                 if track in disabled_tracks:
                     track.mute = False
@@ -136,26 +110,23 @@ if not affected_fcurves:
                     if strip.select:
                         strip.mute = True
                         prev_track = track
-        
-            # create new track + empty strip
+
             new_track = obj.animation_data.nla_tracks.new(prev=prev_track)
             new_track.name = action.name
             strip = new_track.strips.new(name=name, start=strip_start, action=action)
             strip.blend_type = strip_mode
-        
+
             wm.progress_end()
-            bpy.context.scene.frame_set(begin_frame)
+            context.scene.frame_set(begin_frame)
             return {'FINISHED'}
 
-
-        # --------------------------------------------------------------------
-        # Evaluate values at each frame
-        # --------------------------------------------------------------------
+        # ------------------------------------------------------------
+        # Bake values frame by frame
+        # ------------------------------------------------------------
         fcurve_values = []
         for frame in range(strip_start, strip_end):
-            bpy.context.scene.frame_set(frame)
-
-            update_progress(progress_increment)
+            context.scene.frame_set(frame)
+            step()
 
             vals = []
             for path in affected_fcurves:
@@ -165,43 +136,44 @@ if not affected_fcurves:
                     vals.append(obj.path_resolve(path))
             fcurve_values.append(vals)
 
-        # --------------------------------------------------------------------
+        # ------------------------------------------------------------
         # Create merged action
-        # --------------------------------------------------------------------
+        # ------------------------------------------------------------
         name = f"{selected_strips[0].name}_merged"
         action = bpy.data.actions.new(name=name)
 
-        def add_fcurve(action, k):
-            fcurve = action.fcurves.new(data_path=path, index=k)
-            fcurve.extrapolation = 'LINEAR'
-            fcurve.keyframe_points.add(len(fcurve_values))
-            return fcurve
+        def add_fcurve(path, idx):
+            fc = action.fcurves.new(data_path=path, index=idx)
+            fc.extrapolation = 'LINEAR'
+            fc.keyframe_points.add(len(fcurve_values))
+            return fc
 
-        # Populate action F-curves
+        # ------------------------------------------------------------
+        # Write keyframes
+        # ------------------------------------------------------------
         for i, path in enumerate(affected_fcurves):
-            new_fcurves = []
-
             try:
-                for k, n in enumerate(fcurve_values[0][i]):
-                    new_fcurves.append(add_fcurve(action, k))
+                count = len(fcurve_values[0][i])
             except:
-                new_fcurves.append(add_fcurve(action, 0))
+                count = 1
 
-            for frame, frame_values in enumerate(fcurve_values):
-                update_progress(progress_increment / len(affected_fcurves))
+            new_fcurves = [add_fcurve(path, k) for k in range(count)]
 
-                val = frame_values[i]
-                for idx, new_fc in enumerate(new_fcurves):
-                    new_fc.keyframe_points[frame].co.x = frame
-                    new_fc.keyframe_points[frame].interpolation = 'LINEAR'
+            for frame_i, vals in enumerate(fcurve_values):
+                step()
+                value = vals[i]
+
+                for k, fc in enumerate(new_fcurves):
+                    fc.keyframe_points[frame_i].co.x = frame_i + strip_start
+                    fc.keyframe_points[frame_i].interpolation = 'LINEAR'
                     try:
-                        new_fc.keyframe_points[frame].co.y = val[idx]
+                        fc.keyframe_points[frame_i].co.y = value[k]
                     except:
-                        new_fc.keyframe_points[frame].co.y = val
+                        fc.keyframe_points[frame_i].co.y = value
 
-        wm.progress_end()
-
+        # ------------------------------------------------------------
         # Restore NLA state
+        # ------------------------------------------------------------
         prev_track = None
         for track in obj.animation_data.nla_tracks:
             if track in disabled_tracks:
@@ -212,13 +184,14 @@ if not affected_fcurves:
                     strip.mute = True
                     prev_track = track
 
-        # Create the new merged strip
+        # Create merged strip
         new_track = obj.animation_data.nla_tracks.new(prev=prev_track)
         new_track.name = action.name
         strip = new_track.strips.new(name=name, start=strip_start, action=action)
         strip.blend_type = strip_mode
 
-        bpy.context.scene.frame_set(begin_frame)
+        wm.progress_end()
+        context.scene.frame_set(begin_frame)
 
         return {'FINISHED'}
 
@@ -230,19 +203,19 @@ def MergeStrips_ContextMenu(self, context):
 
 classes = (CO_OT_CaN_MergeStrips,)
 
+
 def register():
-    from bpy.utils import register_class
+    for c in classes:
+        bpy.utils.register_class(c)
     bpy.types.NLA_MT_context_menu.append(MergeStrips_ContextMenu)
-    for cls in classes:
-        register_class(cls)
 
 
 def unregister():
-    from bpy.utils import unregister_class
     bpy.types.NLA_MT_context_menu.remove(MergeStrips_ContextMenu)
-    for cls in reversed(classes):
-        unregister_class(cls)
+    for c in reversed(classes):
+        bpy.utils.unregister_class(c)
 
 
 if __name__ == "__main__":
     register()
+
