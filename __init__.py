@@ -54,7 +54,31 @@ class CO_OT_CaN_MergeStrips(bpy.types.Operator):
 
         # Disable tracks that would get in the way of baking.
         for i, track in enumerate(obj.animation_data.nla_tracks):
-            if (not (track.mute or (track in disabled_tracks))) and \
+            if (not (track.mute or (track in disabled_tracks))) and \# If no fcurves found, merge anyway (create empty action)
+if not affected_fcurves:
+    print("No F-curves found — merging strips anyway with an empty action.")
+    name = f"{selected_strips[0].name}_merged"
+    action = bpy.data.actions.new(name=name)
+
+    # restore NLA state
+    for track in obj.animation_data.nla_tracks:
+        if track in disabled_tracks:
+            track.mute = False
+        for strip in track.strips:
+            if strip.select:
+                strip.mute = True
+                prev_track = track
+
+    # create new track + empty strip
+    new_track = obj.animation_data.nla_tracks.new(prev=prev_track)
+    new_track.name = action.name
+    strip = new_track.strips.new(name=name, start=strip_start, action=action)
+    strip.blend_type = strip_mode
+
+    wm.progress_end()
+    bpy.context.scene.frame_set(begin_frame)
+    return {'FINISHED'}
+
             not ((strip_mode == 'REPLACE') and (i < track_min_idx)):
                 disabled_tracks.append(track)
                 track.mute = True
@@ -98,11 +122,31 @@ class CO_OT_CaN_MergeStrips(bpy.types.Operator):
                 if fcurve.array_index == 0 and fcurve.data_path not in affected_fcurves:
                     affected_fcurves.append(fcurve.data_path)
 
-        # If nothing to merge, cancel safely
+        # If no fcurves found, merge anyway (create empty action)
         if not affected_fcurves:
+            print("No F-curves found — merging strips anyway with an empty action.")
+            name = f"{selected_strips[0].name}_merged"
+            action = bpy.data.actions.new(name=name)
+        
+            # restore NLA state
+            for track in obj.animation_data.nla_tracks:
+                if track in disabled_tracks:
+                    track.mute = False
+                for strip in track.strips:
+                    if strip.select:
+                        strip.mute = True
+                        prev_track = track
+        
+            # create new track + empty strip
+            new_track = obj.animation_data.nla_tracks.new(prev=prev_track)
+            new_track.name = action.name
+            strip = new_track.strips.new(name=name, start=strip_start, action=action)
+            strip.blend_type = strip_mode
+        
             wm.progress_end()
-            self.report({'WARNING'}, "No F-curves found in selected strips.")
-            return {'CANCELLED'}
+            bpy.context.scene.frame_set(begin_frame)
+            return {'FINISHED'}
+
 
         # --------------------------------------------------------------------
         # Evaluate values at each frame
